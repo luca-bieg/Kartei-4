@@ -2,21 +2,8 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kartei — Kommentatoren-Datenbank</title>
-
-<!-- iPad / iOS Web-App Einstellungen -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Kartei">
-<meta name="theme-color" content="#12161c">
-<meta name="format-detection" content="telephone=no">
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -39,17 +26,7 @@
     font-family:'IBM Plex Sans', sans-serif;
     -webkit-font-smoothing:antialiased;
   }
-  .app{
-    max-width:1160px; margin:0 auto; padding:28px 20px 80px;
-    padding-top:max(28px, env(safe-area-inset-top));
-    padding-left:max(20px, env(safe-area-inset-left));
-    padding-right:max(20px, env(safe-area-inset-right));
-    padding-bottom:max(80px, env(safe-area-inset-bottom));
-  }
-  html{ background:var(--bg); }
-  @media (display-mode: standalone){
-    body{ overscroll-behavior-y:none; }
-  }
+  .app{ max-width:1160px; margin:0 auto; padding:28px 20px 80px; }
 
   /* Topbar */
   .topbar{ display:flex; align-items:center; justify-content:space-between; gap:14px; margin-bottom:28px; flex-wrap:wrap; }
@@ -1382,8 +1359,13 @@
         <select id="simp-season">
           <option value="file">Wie in der Datei</option>
           <option value="game">Letztes Spiel</option>
+          <option value="game2">Vorletztes Spiel</option>
+          <option value="game3">Drittletztes Spiel</option>
+          <option value="matchday">Spieltag …</option>
           <option value="season" id="simp-season-opt"></option>
         </select>
+        <div class="pimp-team hidden" id="simp-md-label">Spieltag-Nummer</div>
+        <input type="text" id="simp-matchday" class="hidden" inputmode="numeric" maxlength="2" placeholder="z. B. 5">
       </div>
       <label class="pimp-check"><input type="checkbox" id="simp-overwrite"><span>Abweichende Werte bereits gespeicherter Statistiken überschreiben. Ohne Haken werden nur neue Statistiken angelegt und leere Bemerkungen ergänzt; Farbe und Ausblenden bleiben immer unverändert.</span></label>
       <div id="simp-result"></div>
@@ -1418,52 +1400,6 @@
 </div>
 
 <script>
-  /* ---------- Lokaler Speicher (ersetzt window.storage für den eigenständigen Betrieb) ---------- */
-  window.storage = window.storage || (function(){
-    const NS = 'kommentatoren-kartei::';
-    return {
-      async get(key){
-        try{
-          const raw = localStorage.getItem(NS + key);
-          if(raw === null) return null;
-          return { key, value: raw, shared: false };
-        }catch(e){ return null; }
-      },
-      async set(key, value){
-        try{
-          localStorage.setItem(NS + key, value);
-          return { key, value, shared: false };
-        }catch(e){ return null; }
-      },
-      async delete(key){
-        try{
-          localStorage.removeItem(NS + key);
-          return { key, deleted:true, shared:false };
-        }catch(e){ return null; }
-      },
-      async list(prefixArg){
-        try{
-          const keys = [];
-          for(let i=0;i<localStorage.length;i++){
-            const k = localStorage.key(i);
-            if(k && k.startsWith(NS)){
-              const short = k.slice(NS.length);
-              if(!prefixArg || short.startsWith(prefixArg)) keys.push(short);
-            }
-          }
-          return { keys, prefix: prefixArg, shared:false };
-        }catch(e){ return null; }
-      }
-    };
-  })();
-
-  /* ---------- Service Worker für Offline-Nutzung ---------- */
-  if('serviceWorker' in navigator){
-    window.addEventListener('load', ()=>{
-      navigator.serviceWorker.register('./sw.js').catch(()=>{});
-    });
-  }
-
   const STORAGE_KEY = 'kartei_entries';
   const H2H_KEY = 'kartei_h2h';
   const STATS_KEY = 'kartei_stats';
@@ -1475,6 +1411,21 @@
   const FORM_KEY = 'kartei_form_vergleich';
   const CUSTOM_TEAM_VALUE = '__custom__';
   const OFFICIALS_TEAM = 'Offizielle';
+
+  // GitHub Pages / normale Browser stellen window.storage nicht bereit.
+  // In diesem Fall lokale, persistente Speicherung verwenden.
+  if (!window.storage || typeof window.storage.get !== 'function' || typeof window.storage.set !== 'function') {
+    window.storage = {
+      async get(key) {
+        try { return { value: window.localStorage.getItem(String(key)) }; }
+        catch (error) { throw new Error('Lokaler Speicher kann nicht gelesen werden: ' + error.message); }
+      },
+      async set(key, value) {
+        try { window.localStorage.setItem(String(key), String(value)); return true; }
+        catch (error) { throw new Error('Lokaler Speicher kann nicht beschrieben werden: ' + error.message); }
+      }
+    };
+  }
 
   let entries = [];
   let stats = [];
@@ -1606,8 +1557,8 @@
   }
 
   async function persistTeams(){
-    try{ await window.storage.set(TEAMS_KEY, JSON.stringify(teams), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
+    try{ await window.storage.set(TEAMS_KEY, JSON.stringify(teams), false); return true; }
+    catch(e){ console.error('Teams konnten nicht gespeichert werden', e); showToast('Teams konnten nicht gespeichert werden.', true); return false; }
   }
 
   function showSetup(prefill){
@@ -1961,21 +1912,25 @@
     try{
       const res = await window.storage.get(STORAGE_KEY, false);
       entries = res && res.value ? JSON.parse(res.value) : [];
+      if(!Array.isArray(entries)) throw new Error('Ungültige Eintragsdaten');
     }catch(e){ entries = []; }
 
     try{
       const res2 = await window.storage.get(STATS_KEY, false);
       stats = res2 && res2.value ? JSON.parse(res2.value) : [];
+      if(!Array.isArray(stats)) throw new Error('Ungültige Statistikdaten');
     }catch(e){ stats = []; }
 
     try{
       const res3 = await window.storage.get(PENALTIES_KEY, false);
       penalties = res3 && res3.value ? JSON.parse(res3.value) : [];
+      if(!Array.isArray(penalties)) throw new Error('Ungültige Strafdaten');
     }catch(e){ penalties = []; }
 
     try{
       const res4 = await window.storage.get(PLAYERS_KEY, false);
       players = res4 && res4.value ? JSON.parse(res4.value) : [];
+      if(!Array.isArray(players)) throw new Error('Ungültige Spielerdaten');
     }catch(e){ players = []; }
 
     renderInputList();
@@ -1989,22 +1944,20 @@
     renderQuickPenaltyRoster();
   }
 
-  async function persist(){
-    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(entries), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
+  async function persistKey(key, value, label){
+    try{
+      await window.storage.set(key, JSON.stringify(value), false);
+      return true;
+    }catch(e){
+      console.error('Speichern fehlgeschlagen (' + label + ')', e);
+      showToast(label + ' konnten nicht gespeichert werden. Prüfe Speicherplatz und Browser-Berechtigungen.', true);
+      return false;
+    }
   }
-  async function persistStats(){
-    try{ await window.storage.set(STATS_KEY, JSON.stringify(stats), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
-  async function persistPenalties(){
-    try{ await window.storage.set(PENALTIES_KEY, JSON.stringify(penalties), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
-  async function persistPlayers(){
-    try{ await window.storage.set(PLAYERS_KEY, JSON.stringify(players), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
+  async function persist(){ return persistKey(STORAGE_KEY, entries, 'Einträge'); }
+  async function persistStats(){ return persistKey(STATS_KEY, stats, 'Statistiken'); }
+  async function persistPenalties(){ return persistKey(PENALTIES_KEY, penalties, 'Strafen'); }
+  async function persistPlayers(){ return persistKey(PLAYERS_KEY, players, 'Spieler'); }
 
   function deriveEntryTitle(player, category, text){
     if(player) return player;
@@ -2335,7 +2288,7 @@
       return;
     }
     box.innerHTML = roster.map(p => {
-      const existing = statType ? stats.find(s => s.name === p.name && s.team === team && s.statType === statType && s.season === qsLabel()) : null;
+      const existing = statType ? stats.find(s => statNameNorm(s.name) === statNameNorm(p.name) && pimpNorm(s.team) === pimpNorm(team) && s.statType === statType && s.season === qsLabel()) : null;
       return `
         <div class="qs-row">
           <span class="qs-player-name">${p.number ? '#'+escapeHtml(p.number)+' ' : ''}${escapeHtml(p.name)}</span>
@@ -2358,7 +2311,7 @@
       const player = players.find(p => p.id === input.dataset.id);
       if(!player) return;
       const value = input.value.trim();
-      const existingIdx = stats.findIndex(s => s.name === player.name && s.team === team && s.statType === statType && s.season === qsLabel());
+      const existingIdx = stats.findIndex(s => statNameNorm(s.name) === statNameNorm(player.name) && pimpNorm(s.team) === pimpNorm(team) && s.statType === statType && s.season === qsLabel());
       if(value){
         if(existingIdx > -1){
           stats[existingIdx].value = value;
@@ -2867,9 +2820,9 @@
     currentPlayerDetailId = id;
 
     const related = [
-      ...entries.filter(en => en.player === p.name).map(en => ({ kind:'entry', id:en.id, cat: en.category, body: en.text, color: en.color, remarks: en.remarks, hidden: !!en.hidden })),
-      ...stats.filter(s => s.name === p.name).map(s => ({ kind:'stat', id:s.id, cat: 'Statistik', body: `${s.statType}: ${s.value}${s.season ? ' ('+s.season+')' : ''}`, color: s.color, remarks: s.remarks, hidden: !!s.hidden })),
-      ...penalties.filter(pe => pe.name === p.name).map(pe => ({ kind:'penalty', id:pe.id, cat: 'Strafe', body: `Gelb: ${pe.gelb} · 2 Min: ${pe.zweimin} · Rot: ${pe.rot}`, color: pe.color, remarks: pe.remarks, hidden: !!pe.hidden }))
+      ...entries.filter(en => statNameNorm(en.player) === statNameNorm(p.name) && (!en.team || pimpNorm(en.team) === pimpNorm(p.team))).map(en => ({ kind:'entry', id:en.id, cat: en.category, body: en.text, color: en.color, remarks: en.remarks, hidden: !!en.hidden })),
+      ...stats.filter(s => statNameNorm(s.name) === statNameNorm(p.name) && pimpNorm(s.team) === pimpNorm(p.team)).map(s => ({ kind:'stat', id:s.id, cat: 'Statistik', body: `${s.statType}: ${s.value}${s.season ? ' ('+s.season+')' : ''}`, color: s.color, remarks: s.remarks, hidden: !!s.hidden })),
+      ...penalties.filter(pe => statNameNorm(pe.name) === statNameNorm(p.name) && pimpNorm(pe.team) === pimpNorm(p.team)).map(pe => ({ kind:'penalty', id:pe.id, cat: 'Strafe', body: `Gelb: ${pe.gelb} · 2 Min: ${pe.zweimin} · Rot: ${pe.rot}`, color: pe.color, remarks: pe.remarks, hidden: !!pe.hidden }))
     ];
     const visibleRelated = related.filter(r => !r.hidden);
     const hiddenRelated = related.filter(r => r.hidden);
@@ -3027,32 +2980,28 @@
     try{
       const res = await window.storage.get(ANALYSIS_KEY, false);
       analysis = res && res.value ? JSON.parse(res.value) : { home: emptyAnalysis(), away: emptyAnalysis() };
+      if(!analysis || typeof analysis !== 'object' || Array.isArray(analysis)) throw new Error('Ungültige Analysedaten');
     }catch(e){
       analysis = { home: emptyAnalysis(), away: emptyAnalysis() };
     }
     renderAnalysisForm();
   }
 
-  async function persistAnalysis(){
-    try{ await window.storage.set(ANALYSIS_KEY, JSON.stringify(analysis), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
+  async function persistAnalysis(){ return persistKey(ANALYSIS_KEY, analysis, 'Team-Analyse'); }
 
   /* ---------- Formvergleich ---------- */
   async function loadTeamFormData(){
     try{
       const res = await window.storage.get(FORM_KEY, false);
       teamForm = res && res.value ? JSON.parse(res.value) : { home: emptyTeamForm(), away: emptyTeamForm() };
+      if(!teamForm || typeof teamForm !== 'object' || Array.isArray(teamForm)) throw new Error('Ungültige Formdaten');
     }catch(e){
       teamForm = { home: emptyTeamForm(), away: emptyTeamForm() };
     }
     renderTeamFormPage();
   }
 
-  async function persistTeamForm(){
-    try{ await window.storage.set(FORM_KEY, JSON.stringify(teamForm), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
+  async function persistTeamForm(){ return persistKey(FORM_KEY, teamForm, 'Formvergleich'); }
 
   function computeGoalDiff(goals, conceded){
     const g = parseFloat(String(goals).trim().replace(',', '.'));
@@ -3263,16 +3212,14 @@
     try{
       const res = await window.storage.get(H2H_KEY, false);
       h2h = res && res.value ? JSON.parse(res.value) : [];
+      if(!Array.isArray(h2h)) throw new Error('Ungültige Direktvergleichsdaten');
     }catch(e){
       h2h = [];
     }
     renderH2HList();
   }
 
-  async function persistH2H(){
-    try{ await window.storage.set(H2H_KEY, JSON.stringify(h2h), false); }
-    catch(e){ console.error('Speichern fehlgeschlagen', e); }
-  }
+  async function persistH2H(){ return persistKey(H2H_KEY, h2h, 'Direktvergleich'); }
 
   function parseScore(score){
     const m = String(score || '').trim().match(/^(\d+)\s*:\s*(\d+)$/);
@@ -3829,7 +3776,7 @@
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   document.getElementById('export-btn').addEventListener('click', exportAllData);
 
@@ -4091,7 +4038,8 @@ ${pagesHtml}
       await persistStats();
       await persistPenalties();
       await persistPlayers();
-      try{ await window.storage.set(MATCHDAY_KEY, JSON.stringify(matchday), false); }catch(err){}
+      try{ await window.storage.set(MATCHDAY_KEY, JSON.stringify(matchday), false); }
+      catch(err){ console.error('Spieltagsdaten konnten nicht gespeichert werden', err); showToast('Spieltagsdaten konnten nicht gespeichert werden.', true); }
       await persistAnalysis();
       await persistTeamForm();
       await persistH2H();
@@ -4135,6 +4083,9 @@ ${pagesHtml}
     return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase()
       .replace(/ß/g,'ss').replace(/[^a-z0-9]+/g,' ').trim();
   }
+  // Für Vergleiche nur Schreibvarianten wie Akzente/Umlaute vereinheitlichen.
+  // Unterschiedliche Namen (z. B. Lara und Laura) bleiben bewusst verschieden.
+  function statNameNorm(s){ return pimpNorm(s); }
 
   function pimpParseDate(s){
     s = String(s || '').trim();
@@ -4220,7 +4171,7 @@ ${pagesHtml}
     const matches = t => {
       const tn = pimpNorm(t);
       if(!tn || !n) return false;
-      return tn === n || (Math.min(tn.length, n.length) >= 4 && (tn.includes(n) || n.includes(tn)));
+      return tn === n;
     };
     if(matches(teams.home)) return 'home';
     if(matches(teams.away)) return 'away';
@@ -4443,7 +4394,7 @@ ${pagesHtml}
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
   /* ---------- Statistik-Import (Zusammenführen, ohne Überschreiben der Kartei) ---------- */
@@ -4458,6 +4409,9 @@ ${pagesHtml}
     const value = str('value');
     if(!name || !team) return { error:'Name oder Team fehlt', idx, name };
     if(!value) return { error:'Wert fehlt', idx, name };
+    if(name.length > 160 || team.length > 160 || value.length > 500 || str('statType').length > 120 || str('season').length > 120 || str('remarks').length > 2000){
+      return { error:'Ein Feld überschreitet die erlaubte Länge', idx, name };
+    }
     return { rec: { name, team, statType: str('statType') || 'Wert', value, season: str('season'), remarks: str('remarks') } };
   }
 
@@ -4471,6 +4425,12 @@ ${pagesHtml}
   function simpSeasonFor(rec){
     const mode = document.getElementById('simp-season').value;
     if(mode === 'game') return LAST_GAME_LABEL;
+    if(mode === 'game2') return 'Vorletztes Spiel';
+    if(mode === 'game3') return 'Drittletztes Spiel';
+    if(mode === 'matchday'){
+      const n = document.getElementById('simp-matchday').value.replace(/\D/g, '');
+      return n ? 'Spieltag ' + parseInt(n, 10) : rec.season;
+    }
     if(mode === 'season') return seasonLabel(0);
     return rec.season;
   }
@@ -4508,6 +4468,8 @@ ${pagesHtml}
     document.querySelectorAll('#simp-map select').forEach(sel => { sel.value = simp.mapping[sel.getAttribute('data-simp-team')]; });
     document.getElementById('simp-season-opt').textContent = 'Diese Saison (' + seasonLabel(0) + ')';
     document.getElementById('simp-season').value = 'file';
+    document.getElementById('simp-matchday').value = '';
+    simpToggleMatchday();
     document.getElementById('simp-overwrite').checked = false;
     simpRenderResult();
     document.getElementById('simp-overlay').classList.remove('hidden');
@@ -4517,7 +4479,7 @@ ${pagesHtml}
     const overwrite = document.getElementById('simp-overwrite').checked;
     const res = { added:[], updated:[], kept:[], unchanged:0, skipped:0, unknown:new Set() };
     const index = new Map();
-    const keyOf = (team, name, type, season) => [team, name, type, season].map(pimpNorm).join('|');
+    const keyOf = (team, name, type, season) => [pimpNorm(team), statNameNorm(name), pimpNorm(type), pimpNorm(season)].join('|');
     stats.forEach(s => { index.set(keyOf(s.team, s.name, s.statType, s.season), s); });
     const pending = new Set();
 
@@ -4526,14 +4488,16 @@ ${pagesHtml}
       if(m === 'skip'){ res.skipped++; return; }
       const team = m === 'home' ? teams.home : (m === 'away' ? teams.away : rec.team);
       const season = simpSeasonFor(rec);
-      const key = keyOf(team, rec.name, rec.statType, season);
+      const rosterPlayer = players.find(p => statNameNorm(p.name) === statNameNorm(rec.name) && pimpNorm(p.team) === pimpNorm(team));
+      const canonicalRec = rosterPlayer ? { ...rec, name: rosterPlayer.name } : rec;
+      const key = keyOf(team, canonicalRec.name, rec.statType, season);
       if(pending.has(key)){ res.skipped++; return; }
       pending.add(key);
 
-      if(pimpNorm(rec.name) !== pimpNorm(team) && !players.some(p => pimpNorm(p.name) === pimpNorm(rec.name) && pimpNorm(p.team) === pimpNorm(team))) res.unknown.add(rec.name + ' (' + team + ')');
+      if(pimpNorm(rec.name) !== pimpNorm(team) && !rosterPlayer) res.unknown.add(rec.name + ' (' + team + ')');
 
       const existing = index.get(key);
-      if(!existing){ res.added.push({ rec, team, season }); return; }
+      if(!existing){ res.added.push({ rec: canonicalRec, team, season }); return; }
 
       const patch = {}, changes = [], kept = [];
       if(String(existing.value) !== rec.value){
@@ -4583,7 +4547,8 @@ ${pagesHtml}
       </ul></details>` : '';
 
     document.getElementById('simp-result').innerHTML = chips + addedHtml + updatedHtml + keptHtml + problemsHtml;
-    document.getElementById('simp-ok').disabled = (res.added.length + res.updated.length) === 0;
+    const mdMissing = document.getElementById('simp-season').value === 'matchday' && !document.getElementById('simp-matchday').value.replace(/\D/g, '');
+    document.getElementById('simp-ok').disabled = mdMissing || (res.added.length + res.updated.length) === 0;
   }
 
   function simpClose(){
@@ -4593,6 +4558,7 @@ ${pagesHtml}
 
   async function simpApply(){
     const res = simpCompute();
+    const before = stats.map(s => ({ ...s }));
     res.updated.forEach(u => Object.assign(u.existing, u.patch));
     res.added.forEach((a, i) => {
       stats.push({
@@ -4601,7 +4567,13 @@ ${pagesHtml}
         season: a.season, remarks: a.rec.remarks, createdAt: Date.now()
       });
     });
-    await persistStats();
+    const saved = await persistStats();
+    if(!saved){
+      stats = before;
+      renderStatsList();
+      renderQuickStatRoster();
+      return;
+    }
     renderStatsList();
     renderChips();
     renderResults();
@@ -4630,7 +4602,17 @@ ${pagesHtml}
     simp.mapping[sel.getAttribute('data-simp-team')] = sel.value;
     simpRenderResult();
   });
-  document.getElementById('simp-season').addEventListener('change', simpRenderResult);
+  function simpToggleMatchday(){
+    const on = document.getElementById('simp-season').value === 'matchday';
+    document.getElementById('simp-md-label').classList.toggle('hidden', !on);
+    document.getElementById('simp-matchday').classList.toggle('hidden', !on);
+  }
+  document.getElementById('simp-season').addEventListener('change', ()=>{
+    simpToggleMatchday();
+    if(document.getElementById('simp-season').value === 'matchday') document.getElementById('simp-matchday').focus();
+    simpRenderResult();
+  });
+  document.getElementById('simp-matchday').addEventListener('input', simpRenderResult);
   document.getElementById('simp-overwrite').addEventListener('change', simpRenderResult);
   document.getElementById('simp-cancel').addEventListener('click', simpClose);
   document.getElementById('simp-ok').addEventListener('click', simpApply);
